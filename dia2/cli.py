@@ -60,6 +60,11 @@ def main() -> None:
         action="store_true",
         help="Run generation with CUDA graph capture",
     )
+    parser.add_argument(
+        "--torch-compile",
+        action="store_true",
+        help="Run generation with torch.compile optimizations",
+    )
     args = parser.parse_args()
 
     device = args.device
@@ -102,6 +107,8 @@ def main() -> None:
     overrides = {}
     if args.cuda_graph:
         overrides["use_cuda_graph"] = True
+    if args.torch_compile:
+        overrides["use_torch_compile"] = True
     if args.prefix_speaker_1:
         overrides["prefix_speaker_1"] = args.prefix_speaker_1
     if args.prefix_speaker_2:
