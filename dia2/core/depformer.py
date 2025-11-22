@@ -80,28 +80,22 @@ class ScheduleAttention(nn.Module):
                 persistent=False,
             )
 
-    def forward_incremental(
+    def _forward_incremental(
         self,
         x_t: torch.Tensor,
-        stage_index: int,
+        in_proj: nn.Linear,
+        pos_ids: Optional[torch.Tensor],
         cache_slot,
     ) -> Tuple[torch.Tensor, object]:
         bsz, seq, _ = x_t.shape
-        if seq != 1:
-            raise ValueError("ScheduleAttention expects seq len 1 during decoding")
-        orig_dtype = x_t.dtype
-        module_index = self.schedule[stage_index]
-        proj = self.in_proj[str(module_index)](x_t.to(torch.float32))
+        proj = in_proj(x_t.to(torch.float32))
         proj = proj.view(bsz, seq, 3, self.num_query_heads, self.head_dim).to(self.compute_dtype)
 
         q_proj = self.q_norm(proj[:, :, 0])
         k_proj = self.k_norm(proj[:, :, 1])
         v_proj = proj[:, :, 2]
 
-        if self.apply_rope:
-            pos_ids = self.stage_positions[stage_index : stage_index + 1]
-            if pos_ids.device != x_t.device:
-                pos_ids = pos_ids.to(x_t.device)
+        if pos_ids is not None:
             q_proj = self.rotary(q_proj, pos_ids)
             k_proj = self.rotary(k_proj, pos_ids)
 
@@ -124,8 +118,40 @@ class ScheduleAttention(nn.Module):
         )
         attn = attn.transpose(1, 2).contiguous()
         flat = attn.reshape(bsz, seq, self.num_query_heads * self.head_dim)
+        return flat, cache_slot
+
+    # This method usually gets recompiled many times due to the `stage_index`
+    # changing every step.
+    @torch.compiler.disable(recursive=False)
+    def forward_incremental(
+        self,
+        x_t: torch.Tensor,
+        stage_index: int,
+        cache_slot,
+    ) -> Tuple[torch.Tensor, object]:
+        pos_ids = None
+        if self.apply_rope:
+            pos_ids = self.stage_positions[stage_index : stage_index + 1]
+            if pos_ids.device != x_t.device:
+                pos_ids = pos_ids.to(x_t.device)
+        module_index = self.schedule[stage_index]
+
+        if torch.compiler.is_compiling():
+          self._forward_incremental = torch.compile(
+              self._forward_incremental,
+              dynamic=True,
+              mode="max-autotune-no-cudagraphs",
+          )
+
+        result = self._forward_incremental(
+            x_t,
+            in_proj=self.in_proj[str(module_index)],
+            pos_ids=pos_ids,
+            cache_slot=cache_slot,
+        )
+        flat, cache_slot = result
         out = self.out_proj[str(module_index)](flat.to(torch.float32))
-        return out.to(orig_dtype), cache_slot
+        return out.to(x_t.dtype), cache_slot
 
 
 class DepformerLayer(nn.Module):

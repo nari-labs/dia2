@@ -37,6 +37,9 @@ class CacheSlot:
     def reset(self) -> None:
         self.length.zero_()
 
+    # Due to many CacheSlot instances being used in a model, we disable
+    # compilation for this method to avoid excessive compile times.
+    @torch.compiler.disable
     def write_and_view(
         self,
         key_chunk: torch.Tensor,
