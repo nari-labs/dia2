@@ -27,6 +27,7 @@ def apply_classifier_guidance(
     return cond32.to(conditional.dtype)
 
 
+@torch.jit.script
 def sample_audio_logits(logits: torch.Tensor, temp: float, top_k: int) -> torch.Tensor:
     """Sample a single audio token (shape [1]) from logits."""
     return (
