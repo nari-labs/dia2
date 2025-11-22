@@ -16,9 +16,9 @@ def sample_token(
     probs = torch.clamp_min(probs, 0.0)
     flat = probs.reshape(-1, probs.shape[-1])
     norm = flat.sum(dim=-1, keepdim=True)
+    zero_mask = norm <= 0
     norm = norm.clamp_min(1e-12)
     flat = flat / norm
-    zero_mask = norm <= 0
     if zero_mask.any():
         filler = torch.zeros_like(flat)
         filler[..., 0] = 1.0
