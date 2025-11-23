@@ -137,8 +137,8 @@ def _fill_audio_channels(
     else:
         target.fill_(bos_token)
     mask = delays > step
-    if mask.any().item():
-        target[:, mask] = bos_token
+    mask_expanded = mask.unsqueeze(0).expand_as(target)
+    target.copy_(torch.where(mask_expanded, bos_token, target))
 
 
 def _execute_transformer_step(
@@ -290,9 +290,11 @@ def run_generation_loop(
     transformer_needs_compiling = use_torch_compile
     depformer_needs_compiling = [use_torch_compile] * runtime.model.depformer.num_depth
     if use_torch_compile:
-        sample_token_fn = torch.compile(sample_token, dynamic=True, mode="max-autotune-no-cudagraphs")
+        sample_token_fn = torch.compile(sample_token, dynamic=True, mode="max-autotune", fullgraph=True)
+        sample_audio_logits_fn = torch.compile(sample_audio_logits, dynamic=True, mode="max-autotune", fullgraph=True)
     else:
         sample_token_fn = sample_token
+        sample_audio_logits_fn = sample_audio_logits
     transformer_step = runtime.transformer_step
     depformer_step = runtime.depformer_step
     buffers = _allocate_network_buffers(runtime, branches)
@@ -369,7 +371,7 @@ def run_generation_loop(
             if guided_cb0.shape[0] > 1:
                 guided_cb0 = guided_cb0[:1]
             masked_cb0 = mask_audio_logits(guided_cb0, token_ids.audio_pad, token_ids.audio_bos)
-            codebook_token = sample_audio_logits(masked_cb0, config.audio.temperature, config.audio.top_k)
+            codebook_token = sample_audio_logits_fn(masked_cb0, config.audio.temperature, config.audio.top_k)
             audio_buf[:, 0, t + 1] = codebook_token
 
             prev_audio = codebook_token.expand(branches)
@@ -421,7 +423,7 @@ def run_generation_loop(
                 dep_logits = apply_classifier_guidance(buffers.dep[stage], cfg_active, config.cfg_scale, config.cfg_filter_k)
                 if dep_logits.shape[0] > 1:
                     dep_logits = dep_logits[:1]
-                stage_token = sample_audio_logits(
+                stage_token = sample_audio_logits_fn(
                     dep_logits,
                     config.audio.temperature,
                     config.audio.top_k,

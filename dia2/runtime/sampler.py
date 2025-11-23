@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-@torch.jit.script
+
 def sample_token(
     logits: torch.Tensor,
     temp: float,
@@ -19,11 +19,10 @@ def sample_token(
     zero_mask = norm <= 0
     norm = norm.clamp_min(1e-12)
     flat = flat / norm
-    if zero_mask.any():
-        filler = torch.zeros_like(flat)
-        filler[..., 0] = 1.0
-        mask = zero_mask.expand_as(flat)
-        flat = torch.where(mask, filler, flat)
+    filler = torch.zeros_like(flat)
+    filler[..., 0] = 1.0
+    mask = zero_mask.expand_as(flat)
+    flat = torch.where(mask, filler, flat)
     vocab = flat.shape[-1]
     if top_k > 0 and top_k < vocab:
         topv, indices = torch.topk(flat, top_k, dim=-1)
@@ -32,5 +31,5 @@ def sample_token(
         picks = torch.gather(indices, dim=-1, index=draws)
     else:
         picks = torch.multinomial(flat, num_samples=1)
-    picks = picks.reshape([i for i in probs.shape[:-1]] + [1])
+    picks = picks.reshape(probs.shape[:-1] + (1,))
     return picks
