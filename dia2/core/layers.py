@@ -16,6 +16,7 @@ class RotaryEmbedding(nn.Module):
       head_dim: int,
       min_timescale: int,
       max_timescale: int,
+      max_seq_len: int = 1500,
       device: Optional[torch.device] = None,
     ):
         super().__init__()
@@ -25,26 +26,25 @@ class RotaryEmbedding(nn.Module):
         fraction = (2.0 * torch.arange(0, half_dim)) / head_dim
         timescale = min_timescale * (max_timescale / min_timescale) ** fraction
         inv_freq = 1.0 / timescale
+        self.max_seq_len = max_seq_len
         self.register_buffer("inv_freq", inv_freq.to(dtype=torch.float32, device=device), persistent=False)
+        self.register_buffer("cos_cached", None, persistent=False)
+        self.register_buffer("sin_cached", None, persistent=False)
+        self._update_cos_sin_cache()
+
+    def _update_cos_sin_cache(self) -> None:
+        t = torch.arange(self.max_seq_len, device=self.inv_freq.device, dtype=self.inv_freq.dtype)
+        freqs = torch.einsum("i,j->ij", t, self.inv_freq)
+        emb = torch.cat((freqs, freqs), dim=-1)
+        self.register_buffer("cos_cached", emb.cos(), persistent=False)
+        self.register_buffer("sin_cached", emb.sin(), persistent=False)
 
     def forward(self, x: torch.Tensor, position_ids: torch.Tensor) -> torch.Tensor:
-        pos = position_ids.to(self.inv_freq.dtype)
-        freqs = torch.einsum("...i,j->...ij", pos, self.inv_freq)
-        emb = torch.cat((freqs, freqs), dim=-1)
-        while emb.dim() < x.dim():
-            emb = emb.unsqueeze(-2)
-        cos = emb.cos().to(x.dtype)
-        sin = emb.sin().to(x.dtype)
+        cos = self.cos_cached[position_ids].unsqueeze(2).to(dtype=x.dtype)
+        sin = self.sin_cached[position_ids].unsqueeze(2).to(dtype=x.dtype)
         x1, x2 = torch.chunk(x, 2, dim=-1)
         rotated = torch.cat((-x2, x1), dim=-1)
         return (x * cos) + (rotated * sin)
-
-
-def _rotate_half(x: torch.Tensor) -> torch.Tensor:
-    x1 = x[..., ::2]
-    x2 = x[..., 1::2]
-    return torch.stack((-x2, x1), dim=-1).reshape_as(x)
-
 
 def _get_activation(name: str) -> nn.Module:
     name = name.lower()
@@ -94,10 +94,14 @@ class Attention(nn.Module):
         eps = config.model.normalization_layer_epsilon
         self.q_norm = nn.RMSNorm(self.head_dim, eps=eps, dtype=torch.float32, device=device)
         self.k_norm = nn.RMSNorm(self.head_dim, eps=eps, dtype=torch.float32, device=device)
+        
+        # Pre-calculate RoPE for the full context + small buffer
+        rope_len = config.runtime.max_context_steps + 256
         self.rotary = RotaryEmbedding(
             self.head_dim,
             config.model.rope_min_timescale,
             config.model.rope_max_timescale,
+            max_seq_len=rope_len,
             device=device,
         )
 
