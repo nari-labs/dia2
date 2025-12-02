@@ -114,7 +114,6 @@ def build_initial_state(
         device=runtime.device,
     )
     if prefix is not None:
-        delayed = delay_frames(prefix.aligned_tokens, runtime.audio_delays, token_ids.audio_pad).to(runtime.device)
         audio_buf[0, :, : delayed.shape[1]] = delayed
         if branches > 1:
             audio_buf[1:, :, : delayed.shape[1]] = delayed
